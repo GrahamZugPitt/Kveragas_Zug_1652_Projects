@@ -1,7 +1,7 @@
 /*
  * CS 1652 Project 1 
  * (c) Jack Lange, 2020
- * (c) <Student names here>
+ * (c) <Taylor Kvergas, Graham Zug>
  * 
  * Computer Science Department
  * University of Pittsburgh

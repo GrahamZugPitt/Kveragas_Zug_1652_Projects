@@ -1,7 +1,7 @@
 /*
  * CS 1652 Project 1 
  * (c) Jack Lange, 2020
- * (c) <Student names here>
+ * (c) <Graham Zug, Taylor Kvergas>
  * 
  * Computer Science Department
  * University of Pittsburgh
@@ -39,6 +39,7 @@ handle_connection(int sock)
         					"<html><body bgColor=black text=white>\n"               \
         					"<h2>404 FILE NOT FOUND</h2>\n"
         					"</body></html>\n";
+	//Possible headers from server
 
     /* first read loop -- get request and headers*/
 	char buf[BUFSIZE];
@@ -63,7 +64,7 @@ handle_connection(int sock)
 		}
 	}
 	char filename[FILENAMESIZE];
-	
+	//Stores file name in buffer
 	for(int i = 0; i < FILENAMESIZE + pointer + 1; i++){
 		if(i == (FILENAMESIZE + pointer)){
 			write(sock, notok_response, strlen(notok_response));
@@ -82,14 +83,14 @@ handle_connection(int sock)
 	}
     /* open and read the file */
 	int file = open(filename, 0);
-	int theEndOfTheFile = lseek(file, 0, SEEK_END);
-	sprintf(buf2, ok_response_f, theEndOfTheFile);
-	lseek(file, 0, SEEK_SET);
-	if(file == -1){
+	if(file == -1){ //Checks to see that file was opened correctly
 		write(sock, notok_response, strlen(notok_response));
 		close(sock);
 		return -1;
 		}
+	int theEndOfTheFile = lseek(file, 0, SEEK_END); //sets pointer to end of file to get size of file in bytes
+	sprintf(buf2, ok_response_f, theEndOfTheFile); //writes ok response to buffer to we can specify file size
+	lseek(file, 0, SEEK_SET); //resets pointer
 	
 	write(sock, buf2, strlen(buf2)); //The reason I use this buffer is because I need to change the %d to the actual size
 	/* send response */
@@ -148,7 +149,7 @@ main(int argc, char ** argv)
 	}
 	
     /* start listening */
-	if(listen(server_socket, 10) < 0){
+	if(listen(server_socket, 10) < 0){ //This means 10 people are allowed to connect (I think?)
         	fprintf(stderr, "Failed to bind port.\n");
 		close(server_socket);
 		return -1; //Error Processing 
