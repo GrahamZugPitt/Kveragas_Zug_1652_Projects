@@ -42,10 +42,12 @@ handle_connection(int sock)
 
     /* first read loop -- get request and headers*/
 	char buf[BUFSIZE];
-	char buf2[sizeof(notok_response)];	
-	read(sock, buf, sizeof(buf) - 1);
+	char buf2[sizeof(notok_response)]; //Initialize buffers	
+	if(read(sock, buf, sizeof(buf) - 1) < 0){
+        	fprintf(stderr, "Failed to read message from client.\n");
+		close(sock);			
+	}
     /* parse request to get file name */
-    /* Assumption: this is a GET request and filename contains no spaces*/
 	int pointer = 0;
 	for(int i = 0; i < BUFSIZE; i++){
 		if(buf[i] == '/'){
@@ -62,7 +64,12 @@ handle_connection(int sock)
 	}
 	char filename[FILENAMESIZE];
 	
-	for(int i = 0; i < FILENAMESIZE + pointer; i++){
+	for(int i = 0; i < FILENAMESIZE + pointer + 1; i++){
+		if(i == (FILENAMESIZE + pointer)){
+			write(sock, notok_response, strlen(notok_response));
+			close(sock);
+			return 0;			
+		}
 		if(!isspace(buf[pointer])){
 			filename[i] = buf[pointer++];
 
@@ -73,28 +80,30 @@ handle_connection(int sock)
 		}
 	
 	}
-	printf("%s \n", filename);
     /* open and read the file */
 	int file = open(filename, 0);
 	int theEndOfTheFile = lseek(file, 0, SEEK_END);
 	sprintf(buf2, ok_response_f, theEndOfTheFile);
 	lseek(file, 0, SEEK_SET);
 	if(file == -1){
-		write(sock, ok_response_f, strlen(notok_response));
+		write(sock, notok_response, strlen(notok_response));
 		close(sock);
-		shutdown(sock, 2);
-		return 0;
+		return -1;
 		}
 	
-	write(sock, buf2, strlen(buf2));
+	write(sock, buf2, strlen(buf2)); //The reason I use this buffer is because I need to change the %d to the actual size
 	/* send response */
 		int track = 0;
 		while((track = read(file, buf, strlen(buf))) > 0){
+			if(track < 0){
+				printf("Error reading file. \n");	
+				close(sock);
+				return -1;
+			}
 			write(sock, buf, track);
 			}
     /* close socket and free pointers */
 	close(sock);
-	shutdown(sock, 2);
 	return 0;
 }
 
@@ -120,6 +129,11 @@ main(int argc, char ** argv)
     /* initialize and make socket */
 
 	int server_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+
+    	if(server_socket < 0){
+        	fprintf(stderr, "Failed to make socket.\n");
+		return -1; //Error Processing 
+	}
     /* set server address*/
 	struct sockaddr_in server_address;
 		server_address.sin_family = AF_INET;
@@ -127,9 +141,18 @@ main(int argc, char ** argv)
 		server_address.sin_addr.s_addr = INADDR_ANY;
 
     /* bind listening socket */
-	bind(server_socket, (struct sockaddr*) &server_address, sizeof(server_address));
+	if(bind(server_socket, (struct sockaddr*) &server_address, sizeof(server_address)) < 0){
+        	fprintf(stderr, "Failed to bind port.\n");
+		close(server_socket);	
+		return -1; //Error Processing 
+	}
+	
     /* start listening */
-	listen(server_socket, 10); 
+	if(listen(server_socket, 10) < 0){
+        	fprintf(stderr, "Failed to bind port.\n");
+		close(server_socket);
+		return -1; //Error Processing 
+	} 
     /* connection handling loop: wait to accept connection */
     while (1) {
         int client_socket = accept(server_socket, NULL, NULL);
