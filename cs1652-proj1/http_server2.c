@@ -201,11 +201,7 @@ main(int argc, char ** argv)
                 
     /* for a connection socket, handle the connection */              
                 }else{
-                    if(handle_connection(i)< 0){
-                        fprintf(stderr, "Error handling connection.\n");
-                        close(server_socket);
-                        return -1; //Error Processing 
-                    }
+                    handle_connection(i);                    
                     FD_CLR(i,&curr_socket);
                 }
             }
