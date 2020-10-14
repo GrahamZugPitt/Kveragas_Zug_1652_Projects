@@ -1,0 +1,2 @@
+drivers-objs := tap_driver.o \
+                pet_driver.o

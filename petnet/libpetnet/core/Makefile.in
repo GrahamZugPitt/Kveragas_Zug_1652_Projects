@@ -1,0 +1,12 @@
+core-objs :=    packet_pool.o    \
+                packet.o         \
+                ethernet.o       \
+                arp.o            \
+                ipv4.o           \
+                icmp.o           \
+                tcp.o            \
+                tcp_connection.o \
+                udp.o            \
+                udp_endpoint.o   \
+                timer.o          \
+                socket.o
