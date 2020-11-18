@@ -8,6 +8,7 @@
 
 #include <string.h>
 #include <pthread.h>
+
 #include <petnet.h>
 
 #include <util/ip_address.h>
@@ -202,13 +203,13 @@ create_ipv4_tcp_con(struct tcp_con_map * map,
 
     int ret = 0;
 
-    new_con = pet_malloc(sizeof(struct tcp_connection)); //allocates memory for connection
+    new_con = pet_malloc(sizeof(struct tcp_connection));
 
-    new_con->net_type               = IPV4_NETWORK; //sets connection type?
-    new_con->ipv4_tuple.local_ip    = ipv4_addr_clone(local_ip); //gets local ip
-    new_con->ipv4_tuple.remote_ip   = ipv4_addr_clone(remote_ip); //gets remote ip
-    new_con->ipv4_tuple.local_port  = local_port; //gets local port
-    new_con->ipv4_tuple.remote_port = remote_port; //gets remote port
+    new_con->net_type               = IPV4_NETWORK;
+    new_con->ipv4_tuple.local_ip    = ipv4_addr_clone(local_ip);
+    new_con->ipv4_tuple.remote_ip   = ipv4_addr_clone(remote_ip);
+    new_con->ipv4_tuple.local_port  = local_port;
+    new_con->ipv4_tuple.remote_port = remote_port;
     new_con->ref_cnt                = 1;
 
     pthread_mutex_init(&(new_con->con_lock), NULL);
@@ -235,43 +236,6 @@ err:
 
     if (new_con) __free_tcp_connection(new_con);
 
-    return NULL;
-
-}
-
-struct tcp_connection* create_new_listening_connection(struct tcp_con_map * map, struct socket* sock, struct ipv4_addr* local_ip, uint16_t local_port){
-    struct tcp_connection * new_con   = NULL;
-    int ret = 0;
-
-    new_con = pet_malloc(sizeof(struct tcp_connection)); //allocates memory for connection
-    new_con->net_type               = IPV4_NETWORK; //sets connection type?
-    new_con->ipv4_tuple.local_ip    = ipv4_addr_clone(local_ip); //gets local ip
-    new_con->ipv4_tuple.remote_ip   = ipv4_addr_clone(local_ip); //gets remote ip
-    new_con->ipv4_tuple.local_port  = local_port; //gets local port
-    new_con->ipv4_tuple.remote_port = local_port; //gets remote port
-    new_con->ref_cnt                = 1;
-    new_con->con_state                = LISTEN;
-    pthread_mutex_init(&(new_con->con_lock), NULL);
-    pthread_mutex_lock(&(map->lock));
-	//Where Seg Fault happens
-    {
-        ret = pet_htable_insert(map->ipv4_table, (uintptr_t)&(new_con->ipv4_tuple), (uintptr_t)new_con);
-    }
-    pthread_mutex_unlock(&(map->lock));
-    if (ret == -1) {
-        log_error("Could not create new TCP connection\n");
-        goto err;
-    }
-
-    
-    /* We return a locked reference */
-    //    new_con->ref_cnt++;
-    get_tcp_con(new_con);
-    pthread_mutex_lock(&(new_con->con_lock));
-    return new_con;
-err:
-
-    if (new_con) __free_tcp_connection(new_con);
     return NULL;
 
 }
@@ -334,7 +298,6 @@ free_tcp_con_map(struct tcp_con_map * map)
         if (pet_htable_count(map->ipv6_table) != 0) {
             log_error("Memory leak!! Freeing non-empty tcp connection table\n");
         }
-
         pet_free_htable(map->ipv_table);
     }
     */
