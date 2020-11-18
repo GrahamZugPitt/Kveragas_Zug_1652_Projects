@@ -67,11 +67,11 @@ struct tcp_connection {
      * Students fill in below 
      * **********************/
     uint32_t seq_num_local; //These refer to the sequences numbers, etc. that we want the other machine to be on
-    uint32_t ack_num_local;
+    uint32_t ack_num_local; //THESE ARE STORED IN HOST BITS, IF YOU WRITE THEM TO THE NETWORK, YOU MUST CONVERT THEM FIRST
     uint16_t recv_win_local;
 
     uint32_t seq_num_recieved; //These refer to the sequences numbers, etc that we have gotten from the other machine
-    uint32_t ack_num_recieved;
+    uint32_t ack_num_recieved; //THESE ARE STORED IN HOST BITS, IF YOU WRITE THEM TO THE NETWORK, YOU MUST CONVERT THEM FIRST
     uint16_t recv_win_recieved;
 
 
@@ -82,7 +82,6 @@ struct tcp_connection {
 
 };
 
-struct tcp_connection* create_new_listening_connection(struct tcp_con_map * map, struct socket* sock, struct ipv4_addr* local_addr, uint16_t local_port);
 
 /*
  * Returns a locked reference to a TCP connection object corresponding to a socket 

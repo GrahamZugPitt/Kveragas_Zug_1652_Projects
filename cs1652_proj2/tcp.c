@@ -149,9 +149,9 @@ tcp_listen(struct socket    * sock,
            uint16_t           local_port)
 {
 	struct tcp_state      * tcp_state = petnet_state->tcp_state;
-	struct tcp_connection* con = create_new_listening_connection(tcp_state->con_map, sock, local_addr, local_port);
-	//struct tcp_connection* con_2 = get_and_lock_tcp_con_from_sock(tcp_state->con_map, sock);
-	(void)con;
+	struct tcp_connection* con = create_ipv4_tcp_con(tcp_state->con_map, local_addr, local_addr, local_port, local_port);
+	add_sock_to_tcp_con(tcp_state->con_map,con,sock);
+	con->con_state = (tcp_con_state_t)LISTEN;
 	put_and_unlock_tcp_con(con);
 	return 0;
 }
@@ -164,27 +164,106 @@ tcp_connect_ipv4(struct socket    * sock,
                  uint16_t           remote_port)
 {
     struct tcp_state      * tcp_state = petnet_state->tcp_state;
+    (void)tcp_state; //delete me
+	return -1;
+}
+
+int 
+tcp_passive_connect_ipv4(struct socket    * sock, 
+                 struct ipv4_addr * local_addr, 
+                 uint16_t           local_port,
+                 struct ipv4_addr * remote_addr,
+                 uint16_t           remote_port)
+{
+    struct tcp_state      * tcp_state = petnet_state->tcp_state;
     struct tcp_connection* listening = get_and_lock_tcp_con_from_ipv4(tcp_state->con_map,local_addr,local_addr,local_port,local_port);
     struct tcp_connection* con;
     if(listening->con_state == LISTEN){
 	put_and_unlock_tcp_con(listening);
     	con = create_ipv4_tcp_con(tcp_state->con_map,local_addr,remote_addr,local_port,remote_port);
-	/*con->con_state = SYN_RCVD;
-        con->seq_num_recieved = hdr->seq_num; 
-        con->ack_num_recieved = hdr->ack_num;
-    	con->recv_win_recieved = hdr->recv_win;*/
-	
+	remove_tcp_con(tcp_state->con_map, listening);
+	add_sock_to_tcp_con(tcp_state->con_map,con,sock);
+	con->con_state = (tcp_con_state_t)SYN_RCVD;
 	put_and_unlock_tcp_con(con);
 	return 0;
 	}
-    pet_printf("Port not listening.");
+    pet_printf("Port not listening. \n");
     return -1;
 }
 
+static uint16_t 
+_calculate_checksum(struct tcp_connection * con,
+                   struct ipv4_addr    * remote_addr,
+                   struct packet       * pkt)
+{
+    struct ipv4_pseudo_hdr hdr;
+    uint16_t checksum = 0;
+
+    memset(&hdr, 0, sizeof(struct ipv4_pseudo_hdr));
+
+    ipv4_addr_to_octets(con->ipv4_tuple.local_ip,  hdr.src_ip);
+    ipv4_addr_to_octets(remote_addr,                    hdr.dst_ip);
+
+    hdr.proto  = IPV4_PROTO_TCP;
+    hdr.length = htons(pkt->layer_4_hdr_len + pkt->payload_len);
+
+    checksum = calculate_checksum_begin(&hdr, sizeof(struct ipv4_pseudo_hdr) / 2);
+    checksum = calculate_checksum_continue(checksum, pkt->layer_4_hdr, pkt->layer_4_hdr_len / 2);
+    checksum = calculate_checksum_continue(checksum, pkt->payload,     pkt->payload_len     / 2);
+
+
+    /* 
+     * If there is an odd number of data bytes we have to include a 0-byte after the the last byte 
+     */
+    if ((pkt->payload_len % 2) != 0) {
+        uint16_t tmp = *(uint8_t *)(pkt->payload + pkt->payload_len - 1);
+
+        checksum = calculate_checksum_finalize(checksum, &tmp, 1);
+    } else {
+        checksum = calculate_checksum_finalize(checksum, NULL, 0);
+    }
+
+    return checksum;
+}
+
+int get_minimum(int x, int y){
+	if(x < y)
+		return x;
+	return y;
+}
+
 int send_pkt(struct tcp_connection * con){
-	/*struct tcp_state* tcp_state = petnet_state->tcp_state;
+	//struct tcp_state* tcp_state = petnet_state->tcp_state;
 	struct packet* pkt       = NULL;
-	struct tcp_raw_hdr* tcp_hdr   = NULL;	*/
+	struct tcp_raw_hdr* tcp_hdr   = NULL;
+	pkt = create_empty_packet();
+	tcp_hdr = __make_tcp_hdr(pkt,1); //1 represents a single byte of options length
+    	tcp_hdr->src_port = htons(con->ipv4_tuple.local_port);
+    	tcp_hdr->dst_port = htons(con->ipv4_tuple.remote_port);
+	if(con->con_state == SYN_RCVD){
+		tcp_hdr->flags.SYN = 1;
+	}//Maybe replace this by a flag decider function for the general case
+	tcp_hdr->flags.ACK = 1;
+	con->seq_num_recieved = 1;
+	con->ack_num_recieved++;
+	tcp_hdr->seq_num = htonl(con->ack_num_recieved); //Make this random
+	tcp_hdr->ack_num = htonl(con->seq_num_recieved);
+	tcp_hdr->header_len = pkt->layer_4_hdr_len;
+	tcp_hdr->recv_win = (uint16_t) 69420;//Fix window size
+    	pkt->payload_len = get_minimum(get_minimum(1000,pet_socket_send_capacity(con->sock)),con->recv_win_recieved); //be sus of this if you get weird bugs
+	//pet_printf("HERE HERE HERE %i \n",pkt->payload_len);
+    	pkt->payload     = pet_malloc(pkt->payload_len);
+	
+	if(pet_socket_send_capacity(con->sock) > 0){
+    		pet_socket_sending_data(con->sock, pkt->payload, pkt->payload_len);
+	}
+
+    	tcp_hdr->checksum = _calculate_checksum(con, con->ipv4_tuple.remote_ip, pkt);	
+
+	ipv4_pkt_tx(pkt, con->ipv4_tuple.remote_ip);
+
+        //pet_printf("I sent the packet.\n");
+        //print_tcp_header(tcp_hdr);
 	return 0;	
 }
 
@@ -193,17 +272,17 @@ tcp_send(struct socket * sock)
 {
     struct tcp_state      * tcp_state = petnet_state->tcp_state;
     struct tcp_connection * con	      = get_and_lock_tcp_con_from_sock(tcp_state->con_map,sock);
-
 	if(con->con_state == SYN_RCVD){
-		//send_pkt(con); 
-		pet_printf("");
+		put_and_unlock_tcp_con(con);
+		send_pkt(con); 
+		return 0;
 	}
 	if(con->con_state != ESTABLISHED){
 		log_error("TCP connection is not established \n");
 		goto err;
 	}
 	
-	//send_pkt(con);
+	send_pkt(con);
 	put_and_unlock_tcp_con(con);
 	
 	return 0;
@@ -231,8 +310,12 @@ tcp_close(struct socket * sock)
 }
 
 
-
-
+int update_con_packet_info(struct tcp_connection * con, struct tcp_raw_hdr* tcp_hdr){
+        con->seq_num_recieved = ntohl(tcp_hdr->seq_num); 
+        con->ack_num_recieved = ntohl(tcp_hdr->ack_num);
+    	con->recv_win_recieved = ntohs(tcp_hdr->recv_win);
+	return 0;	
+}
 
 
 int 
@@ -262,27 +345,39 @@ tcp_pkt_rx(struct packet * pkt) //TODO: Actually get the payload, all this does 
 
     src_ip   = ipv4_addr_from_octets(ipv4_hdr->src_ip);
     dst_ip   = ipv4_addr_from_octets(ipv4_hdr->dst_ip);
-    con_check_initial = get_and_lock_tcp_con_from_ipv4(tcp_state->con_map,dst_ip,dst_ip,ntohs(tcp_hdr->dst_port),ntohs(tcp_hdr->dst_port)); //gotta free it
-    if(con_check_initial != NULL){
-		put_and_unlock_tcp_con(con_check_initial);
-		if(tcp_hdr->flags.SYN == 1){
-			tcp_connect_ipv4(con_check_initial->sock, dst_ip, ntohs(tcp_hdr->dst_port), src_ip, ntohs(tcp_hdr->src_port));
-			//con->con_state = SYN_RCVD;
-			return 0;
+    if(tcp_hdr->flags.ACK != 1 && tcp_hdr->flags.SYN == 1){ 
+    		con_check_initial = get_and_lock_tcp_con_from_ipv4(tcp_state->con_map,dst_ip,dst_ip,ntohs(tcp_hdr->dst_port),ntohs(tcp_hdr->dst_port)); //gotta free it
+		if(con_check_initial == NULL || con_check_initial->con_state != LISTEN){
+			pet_printf("Attempted to contact a server that was not listening");
+			return -1;
 		}
-		pet_printf("Client attempted to contact an open port without the SYN flag.");
-		return -1;
+		put_and_unlock_tcp_con(con_check_initial); //free here is important b/c internal return statement.
+		tcp_passive_connect_ipv4(con_check_initial->sock, dst_ip, ntohs(tcp_hdr->dst_port), src_ip, ntohs(tcp_hdr->src_port));
+		con = get_and_lock_tcp_con_from_ipv4(tcp_state->con_map,dst_ip,src_ip,ntohs(tcp_hdr->dst_port),ntohs(tcp_hdr->src_port));
+		update_con_packet_info(con, tcp_hdr);
+		put_and_unlock_tcp_con(con);
+		tcp_send(con->sock);
+		return ret;
+	} 
+
+    	con = get_and_lock_tcp_con_from_ipv4(tcp_state->con_map, dst_ip, src_ip, ntohs(tcp_hdr->dst_port), ntohs(tcp_hdr->src_port));
+    	if(con == NULL){
+		return ret;
 	}
-    put_and_unlock_tcp_con(con_check_initial);
-    con = get_and_lock_tcp_con_from_ipv4(tcp_state->con_map, dst_ip, src_ip, ntohs(tcp_hdr->dst_port), ntohs(tcp_hdr->src_port));
-	(void)con;
+	update_con_packet_info(con, tcp_hdr);
+    	if(con->con_state == SYN_RCVD && tcp_hdr->flags.FIN == 0){
+		pet_socket_accepted(con->sock, src_ip, ntohs(tcp_hdr->src_port));
+		con->con_state = ESTABLISHED;
+	}
+    	put_and_unlock_tcp_con(con);
+	tcp_send(con->sock);
 	(void)payload;
-	(void)src_ip;
 	return ret;
     }
 
     return -1;
 }
+
 
 int 
 tcp_init(struct petnet * petnet_state)
