@@ -165,7 +165,10 @@ tcp_connect_ipv4(struct socket    * sock,
 {
     struct tcp_state      * tcp_state = petnet_state->tcp_state;
     (void)tcp_state; //delete me
-	return -1;
+	return -1; /*TODO: Set con_state flag to SYN_SENT, call TCP_send with the connection, I will handle the outgoing packet in TCP_send
+			create_ipv4_tcp_con, add_sock_to_tcp_con,
+			lock the connection
+			*/
 }
 
 int 
@@ -232,6 +235,15 @@ int get_minimum(int x, int y){
 	return y;
 }
 
+int flag_handler(struct tcp_connection* con, struct tcp_raw_hdr* tcp_hdr){
+	
+	if(con->con_state == SYN_RCVD){
+		tcp_hdr->flags.SYN = 1;
+		con->seq_num_recieved++;
+	}//Maybe replace this by a flag decider function for the general case
+	return 0;
+}
+
 int send_pkt(struct tcp_connection * con){
 	//struct tcp_state* tcp_state = petnet_state->tcp_state;
 	struct packet* pkt       = NULL;
@@ -240,12 +252,8 @@ int send_pkt(struct tcp_connection * con){
 	tcp_hdr = __make_tcp_hdr(pkt,1); //1 represents a single byte of options length
     	tcp_hdr->src_port = htons(con->ipv4_tuple.local_port);
     	tcp_hdr->dst_port = htons(con->ipv4_tuple.remote_port);
-	if(con->con_state == SYN_RCVD){
-		tcp_hdr->flags.SYN = 1;
-	}//Maybe replace this by a flag decider function for the general case
+	flag_handler(con, tcp_hdr);
 	tcp_hdr->flags.ACK = 1;
-	con->seq_num_recieved = 1;
-	con->ack_num_recieved++;
 	tcp_hdr->seq_num = htonl(con->ack_num_recieved); //Make this random
 	tcp_hdr->ack_num = htonl(con->seq_num_recieved);
 	tcp_hdr->header_len = pkt->layer_4_hdr_len;
@@ -310,8 +318,8 @@ tcp_close(struct socket * sock)
 }
 
 
-int update_con_packet_info(struct tcp_connection * con, struct tcp_raw_hdr* tcp_hdr){
-        con->seq_num_recieved = ntohl(tcp_hdr->seq_num); 
+int update_con_packet_info(struct tcp_connection * con, struct tcp_raw_hdr* tcp_hdr, struct packet* pkt){
+        con->seq_num_recieved = ntohl(tcp_hdr->seq_num) + pkt->payload_len; 
         con->ack_num_recieved = ntohl(tcp_hdr->ack_num);
     	con->recv_win_recieved = ntohs(tcp_hdr->recv_win);
 	return 0;	
@@ -338,10 +346,10 @@ tcp_pkt_rx(struct packet * pkt) //TODO: Actually get the payload, all this does 
     tcp_hdr  = __get_tcp_hdr(pkt);
     payload  = __get_payload(pkt);
 
-    //if (petnet_state->debug_enable) {
+    if (petnet_state->debug_enable) {
         pet_printf("I recieved the packet.\n");
         print_tcp_header(tcp_hdr);
-    //}
+    }
 
     src_ip   = ipv4_addr_from_octets(ipv4_hdr->src_ip);
     dst_ip   = ipv4_addr_from_octets(ipv4_hdr->dst_ip);
@@ -354,7 +362,7 @@ tcp_pkt_rx(struct packet * pkt) //TODO: Actually get the payload, all this does 
 		put_and_unlock_tcp_con(con_check_initial); //free here is important b/c internal return statement.
 		tcp_passive_connect_ipv4(con_check_initial->sock, dst_ip, ntohs(tcp_hdr->dst_port), src_ip, ntohs(tcp_hdr->src_port));
 		con = get_and_lock_tcp_con_from_ipv4(tcp_state->con_map,dst_ip,src_ip,ntohs(tcp_hdr->dst_port),ntohs(tcp_hdr->src_port));
-		update_con_packet_info(con, tcp_hdr);
+		update_con_packet_info(con, tcp_hdr,pkt);
 		put_and_unlock_tcp_con(con);
 		tcp_send(con->sock);
 		return ret;
@@ -364,14 +372,14 @@ tcp_pkt_rx(struct packet * pkt) //TODO: Actually get the payload, all this does 
     	if(con == NULL){
 		return ret;
 	}
-	update_con_packet_info(con, tcp_hdr);
+	update_con_packet_info(con, tcp_hdr, pkt);
     	if(con->con_state == SYN_RCVD && tcp_hdr->flags.FIN == 0){
 		pet_socket_accepted(con->sock, src_ip, ntohs(tcp_hdr->src_port));
 		con->con_state = ESTABLISHED;
 	}
     	put_and_unlock_tcp_con(con);
 	tcp_send(con->sock);
-	(void)payload;
+	pet_socket_received_data(con->sock,payload,pkt->payload_len);
 	return ret;
     }
 
