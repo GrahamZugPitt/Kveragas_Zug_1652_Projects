@@ -33,7 +33,7 @@ typedef enum { CLOSED      = 0,
                CLOSING     = 7,
                LAST_ACK    = 8,
                FIN_WAIT2   = 9,
-               TIME_WAIT   = 10 } tcp_con_state_t;
+               TIME_WAIT   = 10} tcp_con_state_t;
 
 
 struct tcp_con_ipv4_tuple {
