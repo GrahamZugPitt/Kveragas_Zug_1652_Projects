@@ -9,6 +9,7 @@
 #include <string.h>
 #include <errno.h>
 #include <petnet.h>
+#include <unistd.h>
 
 #include <petlib/pet_util.h>
 #include <petlib/pet_log.h>
@@ -197,7 +198,6 @@ int flag_handler(struct tcp_connection* con, struct tcp_raw_hdr* tcp_hdr){
 			tcp_hdr->flags.ACK = 1;
 			return 0;
 		case FIN_WAIT1:
-			con->con_state = FIN_WAIT2;
 			tcp_hdr->flags.FIN = 1;
 			tcp_hdr->flags.ACK = 1;
 			return 0;
@@ -221,7 +221,6 @@ int flag_handler(struct tcp_connection* con, struct tcp_raw_hdr* tcp_hdr){
 }
 
 int send_pkt(struct tcp_connection * con){
-	//struct tcp_state* tcp_state = petnet_state->tcp_state;
 	struct packet* pkt       = NULL;
 	struct tcp_raw_hdr* tcp_hdr   = NULL;
 	pkt = create_empty_packet();
@@ -247,6 +246,7 @@ int send_pkt(struct tcp_connection * con){
     	tcp_hdr->checksum = _calculate_checksum(con, con->ipv4_tuple.remote_ip, pkt);	
 
 	ipv4_pkt_tx(pkt, con->ipv4_tuple.remote_ip);
+	
 
 	return 0;	
 }
@@ -299,7 +299,6 @@ tcp_passive_connect_ipv4(struct socket    * sock,
 	put_and_unlock_tcp_con(listening);
     	con = create_ipv4_tcp_con(tcp_state->con_map,local_addr,remote_addr,local_port,remote_port);
 	add_sock_to_tcp_con(tcp_state->con_map,con,sock);
-	remove_tcp_con(tcp_state->con_map, listening);
 	con->con_state = SYN_RCVD;
 	put_and_unlock_tcp_con(con);
 	return 0;
@@ -336,9 +335,6 @@ tcp_close(struct socket * sock)
 {
     struct tcp_state      * tcp_state = petnet_state->tcp_state;
     struct tcp_connection * con	      = get_and_lock_tcp_con_from_sock(tcp_state->con_map,sock);
-    if(con == NULL){
-    	E
-	}
     con->con_state = FIN_WAIT1;
     
     send_pkt(con);
@@ -376,10 +372,10 @@ tcp_pkt_rx(struct packet * pkt)
     tcp_hdr  = __get_tcp_hdr(pkt);
     payload  = __get_payload(pkt);
 
-    if (petnet_state->debug_enable) {
+    //if (petnet_state->debug_enable) {
         pet_printf("I recieved the packet.\n");
         print_tcp_header(tcp_hdr);
-    }
+    //}
 
     src_ip   = ipv4_addr_from_octets(ipv4_hdr->src_ip);
     dst_ip   = ipv4_addr_from_octets(ipv4_hdr->dst_ip);
@@ -402,13 +398,14 @@ tcp_pkt_rx(struct packet * pkt)
     	if(con == NULL){ //Checks if con is not listening and there is no connection (effectively)
 		return ret;
 	}
+	pet_printf("CON STATE %i\n", con->con_state);
 	update_con_packet_info(con, tcp_hdr, pkt);
     	if(con->con_state == SYN_SENT && tcp_hdr->flags.FIN == 0 && tcp_hdr->flags.ACK == 1){
 		pet_socket_accepted(con->sock, src_ip, ntohs(tcp_hdr->src_port));
 		con->con_state = ESTABLISHED;
 	}
     	if(con->con_state == SYN_RCVD && tcp_hdr->flags.FIN == 0){
-		pet_socket_accepted(con->sock, src_ip, ntohs(tcp_hdr->src_port));
+		add_sock_to_tcp_con(tcp_state->con_map,con,pet_socket_accepted(con->sock, src_ip, ntohs(tcp_hdr->src_port)));
 		con->con_state = ESTABLISHED;
 	}
     	if(con->con_state == LAST_ACK && tcp_hdr->flags.ACK == 1){ //TODO: Update this function so it checks that the ACKs are correct (maybe)
@@ -416,10 +413,30 @@ tcp_pkt_rx(struct packet * pkt)
 		remove_tcp_con(tcp_state->con_map, con);
 		return ret;
 	}
-    	if(tcp_hdr->flags.FIN == 1){
+    	/*if(tcp_hdr->flags.FIN == 1){
 		con->con_state = CLOSE_WAIT;
+	}*/
+    	if(con->con_state == FIN_WAIT1 && tcp_hdr->flags.FIN == 0){ //TODO: Possible we aren't supposed to ACK here and netcat is just stupid
+		E E E
+		send_pkt(con);
+		return ret; 
 	}
-	send_pkt(con->sock); //possible this shouldn't be here, but I think it ensures we are ACKing properly
+    	if(con->con_state == FIN_WAIT1 && tcp_hdr->flags.FIN == 1){ 
+		E E
+		send_pkt(con);
+		con->con_state = FIN_WAIT2;
+		return ret; 
+	}
+    	if(con->con_state == FIN_WAIT2 && tcp_hdr->flags.FIN == 1){ 
+		E
+		send_pkt(con);
+		pet_socket_closed(con->sock);
+		remove_tcp_con(tcp_state->con_map, con);
+	}
+
+	//if(!(con->con_state == FIN_WAIT2 && tcp_hdr->flags.FIN == 0)){ 
+		//send_pkt(con); //possible this shouldn't be here, but I think it ensures we are ACKing properly
+	//}
     	put_and_unlock_tcp_con(con);
 	pet_socket_received_data(con->sock,payload,pkt->payload_len); //TODO: Make sure that this isn't feeding too much data to the socket, Order may matter here and you may need to put this somewhere else. 
 	return ret;
