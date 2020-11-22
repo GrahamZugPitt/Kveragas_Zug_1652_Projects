@@ -78,6 +78,22 @@ __get_payload(struct packet * pkt)
     }
 
 }
+static inline uint32_t 
+__get_payload_len(struct packet * pkt)
+{
+    if (pkt->layer_3_type == IPV4_PKT) {
+        struct ipv4_raw_hdr * ipv4_hdr = pkt->layer_3_hdr;
+
+        pkt->payload     = pkt->layer_4_hdr + pkt->layer_4_hdr_len;
+        pkt->payload_len = ntohs(ipv4_hdr->total_len) - (pkt->layer_3_hdr_len + pkt->layer_4_hdr_len);
+
+        return pkt->payload_len;
+    } else {
+        log_error("Unhandled layer 3 packet format\n");
+        return 0;
+    }
+
+}
 
 pet_json_obj_t
 tcp_hdr_to_json(struct tcp_raw_hdr * hdr)
@@ -184,7 +200,6 @@ uint16_t get_minimum(uint16_t x, uint16_t y){
 }
 
 int flag_handler(struct tcp_connection* con, struct tcp_raw_hdr* tcp_hdr){
-   pet_printf("flag handler called");
     switch(con->con_state){
         case SYN_SENT:
             tcp_hdr->flags.SYN = 1;
@@ -236,14 +251,16 @@ int send_pkt(struct tcp_connection * con){
         pet_printf("Error setting flags correctly");
         exit(0);
     }
-    tcp_hdr->seq_num = htonl(con->ack_num_received); //Make this random in the beginning
-    tcp_hdr->ack_num = htonl(con->seq_num_received);
+    tcp_hdr->seq_num = htonl(con->seq_num_local); //Make this random in the beginning
+    tcp_hdr->ack_num = htonl(con->ack_num_local);
     tcp_hdr->header_len = pkt->layer_4_hdr_len;
     tcp_hdr->recv_win = htons((uint16_t) 1000);
 
-    pkt->payload_len = get_minimum((uint16_t)pet_socket_send_capacity(con->sock),con->recv_win_received); //TODO: fix this
+   // pkt->payload_len = get_minimum((uint16_t)pet_socket_send_capacity(con->sock),con->recv_win_received); //TODO: fix this
     //pet_printf("HERE HERE HERE %u \n",pkt->payload_len);
-    pkt->payload     = pet_malloc(pkt->payload_len);
+    //pkt->payload     = pet_malloc(pkt->payload_len);
+    pkt->payload = NULL;
+    pkt->payload_len=0;
     print_tcp_header(tcp_hdr);
     pet_socket_sending_data(con->sock, pkt->payload, pkt->payload_len);
     tcp_hdr->checksum = _calculate_checksum(con->ipv4_tuple.local_ip, con->ipv4_tuple.remote_ip, pkt);  
@@ -282,7 +299,6 @@ tcp_connect_ipv4(struct socket    * sock,
                  struct ipv4_addr * remote_addr,
                  uint16_t           remote_port)
 {
-    pet_printf("connect called");
     struct tcp_state      * tcp_state = petnet_state->tcp_state;
         struct tcp_connection* con = create_ipv4_tcp_con(tcp_state->con_map,local_addr,remote_addr,local_port,remote_port);
     add_sock_to_tcp_con(tcp_state->con_map,con,sock);
@@ -302,7 +318,6 @@ tcp_passive_connect_ipv4(struct socket    * sock,
                  struct ipv4_addr * remote_addr,
                  uint16_t           remote_port)
 {
-    pet_printf("passive connect called");
     struct tcp_state      * tcp_state = petnet_state->tcp_state;
     struct tcp_connection* listening = get_and_lock_tcp_con_from_ipv4(tcp_state->con_map,local_addr,local_addr,local_port,local_port);
     struct tcp_connection* con;
@@ -322,7 +337,6 @@ tcp_passive_connect_ipv4(struct socket    * sock,
 int
 tcp_send(struct socket * sock)
 {
-    pet_printf("send called");
     struct tcp_state      * tcp_state = petnet_state->tcp_state;
     struct tcp_connection * con       = get_and_lock_tcp_con_from_sock(tcp_state->con_map,sock);
 
@@ -364,17 +378,6 @@ tcp_close(struct socket * sock)
     return 0;   
 }*/
 
-int update_payload_ack_response(struct tcp_connection * con, struct tcp_raw_hdr* tcp_hdr, struct packet* pkt){
-        
-        if(con->ack_num_local > ntohl(tcp_hdr->ack_num)){
-            pet_printf("updatde payload response\n");
-            con->seq_num_local = ntohl(tcp_hdr->seq_num) + pkt->payload_len; 
-            con->ack_num_local = ntohl(tcp_hdr->seq_num);
-        }
-
-        //con->recv_win_local = ntohs(tcp_hdr->recv_win);
-    return 0;   
-}
 
 int get_max(uint16_t x, uint16_t y ){
     if(x > y){
@@ -383,30 +386,42 @@ int get_max(uint16_t x, uint16_t y ){
     return y;
 }
 
-int update_con_packet_info(struct tcp_connection * con, struct tcp_raw_hdr* tcp_hdr, struct packet* pkt){
-        con->seq_num_received = ntohl(tcp_hdr->seq_num) + get_max(pkt->payload_len, 1); 
-        con->ack_num_received = ntohl(tcp_hdr->ack_num);
-        con->recv_win_received = ntohs(tcp_hdr->recv_win);
+int update_con_packet_info(struct tcp_connection * con, struct tcp_raw_hdr* tcp_hdr, uint32_t payload_len){
+
+    con->seq_num_received = ntohl(tcp_hdr->seq_num); 
+    con->ack_num_received = ntohl(tcp_hdr->ack_num);
+    con->recv_win_received = ntohs(tcp_hdr->recv_win);
+
+    //if(con->seq_num_local > con->seq_num_received){
+        // to handle repeat packet?
+    //    return -1;
+   // }
+
+    if(con->seq_num_local == con->ack_num_received){
+        con->seq_num_local++;
+    }else if(con->seq_num_received < con->ack_num_local || con->ack_num_received < con->seq_num_local)  {
+        return -1;
+    }else{
+        con->seq_num_local = con->ack_num_received;
+    }
+
+
+
+    con->ack_num_local = con->seq_num_received + get_max(1, payload_len);
+    
+    pet_printf("Stupid fucking numbers\n");
+    pet_printf("seq local: %u\n", con->seq_num_local);
+    pet_printf("ack local: %u\n", con->ack_num_local);
+    pet_printf("seq rec: %u\n", con->seq_num_received);
+    pet_printf("ack rec: %u\n", con->ack_num_received);
     return 0;   
 }
 
-
-
-int update_hdr_ack_response(struct tcp_connection * con, struct tcp_raw_hdr* tcp_hdr){
-        
-        if(con->ack_num_local > ntohl(tcp_hdr->ack_num)){
-            pet_printf("updated hdr response\n");
-            con->seq_num_local = ntohl(tcp_hdr->seq_num) + 1; 
-            con->ack_num_local = ntohl(tcp_hdr->seq_num);
-        }
-    return 0;   
-}
 
 
 int 
 tcp_pkt_rx(struct packet * pkt)
 {
-    pet_printf("receive packets called\n");
     if (pkt->layer_3_type == IPV4_PKT) {
    
         struct tcp_state* tcp_state = petnet_state->tcp_state;
@@ -452,10 +467,13 @@ tcp_pkt_rx(struct packet * pkt)
         if(con == NULL){ //Checks if con is not listening and there is no connection (effectively)
             return ret;
         }
-        pet_printf("State: %d\n", con->con_state);
 
-        //update_con_packet_info(con, tcp_hdr, pkt);
-        update_con_packet_info(con,tcp_hdr,pkt);
+        //upsssdate_con_packet_info(con, tcp_hdr, pkt);
+        int status = update_con_packet_info(con, tcp_hdr, __get_payload_len(pkt));
+        if(status < 0){
+            put_and_unlock_tcp_con(con);
+            return ret;
+        }
         switch(con->con_state){
             case SYN_RCVD:
                 if(tcp_hdr->flags.ACK == 1){
@@ -465,7 +483,6 @@ tcp_pkt_rx(struct packet * pkt)
                     con->con_state = ESTABLISHED;
                     add_sock_to_tcp_con(tcp_state->con_map,con,pet_socket_accepted(con->sock, src_ip, ntohs(tcp_hdr->src_port)));  
                 }else{
-                    pet_printf("Step 2 of handshake.\n");
                     //update_hdr_ack_response(con, tcp_hdr);
                     send_pkt(con);
                 }
@@ -475,7 +492,7 @@ tcp_pkt_rx(struct packet * pkt)
                 if(tcp_hdr->flags.FIN == 1){
                     //update_hdr_ack_response(con, tcp_hdr);
                     con->con_state = CLOSE_WAIT;
-                }else if(tcp_hdr->flags.ACK == 1){
+                }else if(tcp_hdr->flags.ACK == 1 && __get_payload_len(pkt)==0){
                     pet_printf("Received data segment.\n ");
                     send_pkt(con);
                 //TODO: handle acking data segments
@@ -534,7 +551,6 @@ tcp_pkt_rx(struct packet * pkt)
 int 
 tcp_init(struct petnet * petnet_state)
 {
-    pet_printf("tcp_init called");
     struct tcp_state * state = pet_malloc(sizeof(struct tcp_state));
 
     state->con_map  = create_tcp_con_map();
