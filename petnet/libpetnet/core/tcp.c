@@ -27,7 +27,7 @@
 #include "packet.h"
 #include "socket.h"
 
-#define E pet_printf("Hooty Hoo \n");
+#define EZ pet_printf("%u \n", ntohs(tcp_hdr->checksum));
 
 
 extern int petnet_errno;
@@ -148,7 +148,6 @@ _calculate_checksum(struct tcp_connection * con,
 {
     struct ipv4_pseudo_hdr hdr;
     uint16_t checksum = 0;
-
     memset(&hdr, 0, sizeof(struct ipv4_pseudo_hdr));
 
     ipv4_addr_to_octets(con->ipv4_tuple.local_ip,  hdr.src_ip);
@@ -157,11 +156,12 @@ _calculate_checksum(struct tcp_connection * con,
     hdr.proto  = IPV4_PROTO_TCP;
     hdr.length = htons(pkt->layer_4_hdr_len + pkt->payload_len);
 
-    checksum = calculate_checksum_begin(&hdr, sizeof(struct ipv4_pseudo_hdr) / 2);
-    checksum = calculate_checksum_continue(checksum, pkt->layer_4_hdr, pkt->layer_4_hdr_len / 2);
-    checksum = calculate_checksum_continue(checksum, pkt->payload,     pkt->payload_len     / 2);
+    checksum = calculate_checksum_begin(&hdr, sizeof(struct ipv4_pseudo_hdr) / 2); 
+    checksum = calculate_checksum_continue(checksum, pkt->layer_4_hdr, pkt->layer_4_hdr_len / 2); 
+    checksum = calculate_checksum_continue(checksum, pkt->payload,     pkt->payload_len     / 2); 
 
-
+	if (pkt->payload_len > 0) 
+		checksum = checksum - (uint16_t)255;	
     /* 
      * If there is an odd number of data bytes we have to include a 0-byte after the the last byte 
      */
@@ -172,11 +172,10 @@ _calculate_checksum(struct tcp_connection * con,
     } else {
         checksum = calculate_checksum_finalize(checksum, NULL, 0);
     }
-
     return checksum;
 }
 
-int get_minimum(int x, int y){
+uint16_t get_minimum(uint16_t x, uint16_t y){
 	if(x < y)
 		return x;
 	return y;
@@ -231,22 +230,23 @@ int send_pkt(struct tcp_connection * con){
 		pet_printf("Error setting flags correctly");
 		exit(0);
 	}
-	tcp_hdr->seq_num = htonl(con->ack_num_recieved); //Make this random
+	tcp_hdr->seq_num = htonl(con->ack_num_recieved); //Make this random in the beginning
 	tcp_hdr->ack_num = htonl(con->seq_num_recieved);
 	tcp_hdr->header_len = pkt->layer_4_hdr_len;
-	tcp_hdr->recv_win = (uint16_t) 69420;//TODO: Fix window size
-    	pkt->payload_len = get_minimum(get_minimum(1000,pet_socket_send_capacity(con->sock)),con->recv_win_recieved); //be sus of this if you get weird bugs
-	//pet_printf("HERE HERE HERE %i \n",pkt->payload_len);
+	tcp_hdr->recv_win = htons((uint16_t) 1000);
+
+    	pkt->payload_len = get_minimum((uint16_t)pet_socket_send_capacity(con->sock),con->recv_win_recieved); //TODO: fix this
+	pet_printf("HERE HERE HERE %u \n",pkt->payload_len);
     	pkt->payload     = pet_malloc(pkt->payload_len);
-	
+		
 	if(pet_socket_send_capacity(con->sock) > 0){
     		pet_socket_sending_data(con->sock, pkt->payload, pkt->payload_len);
 	}
-
     	tcp_hdr->checksum = _calculate_checksum(con, con->ipv4_tuple.remote_ip, pkt);	
-
+	pet_printf("HERE HERE HERE %u \n",pkt->payload_len);	
 	ipv4_pkt_tx(pkt, con->ipv4_tuple.remote_ip);
-	
+        //pet_printf("I sent the packet.\n");
+        //print_tcp_header(tcp_hdr);
 
 	return 0;	
 }
@@ -398,10 +398,10 @@ tcp_pkt_rx(struct packet * pkt)
     	if(con == NULL){ //Checks if con is not listening and there is no connection (effectively)
 		return ret;
 	}
-	pet_printf("CON STATE %i\n", con->con_state);
+	//pet_printf("CON STATE %i\n", con->con_state);
 	update_con_packet_info(con, tcp_hdr, pkt);
     	if(con->con_state == SYN_SENT && tcp_hdr->flags.FIN == 0 && tcp_hdr->flags.ACK == 1){
-		pet_socket_accepted(con->sock, src_ip, ntohs(tcp_hdr->src_port));
+		add_sock_to_tcp_con(tcp_state->con_map,con,pet_socket_accepted(con->sock, src_ip, ntohs(tcp_hdr->src_port)));
 		con->con_state = ESTABLISHED;
 	}
     	if(con->con_state == SYN_RCVD && tcp_hdr->flags.FIN == 0){
@@ -417,18 +417,18 @@ tcp_pkt_rx(struct packet * pkt)
 		con->con_state = CLOSE_WAIT;
 	}*/
     	if(con->con_state == FIN_WAIT1 && tcp_hdr->flags.FIN == 0){ //TODO: Possible we aren't supposed to ACK here and netcat is just stupid
-		E E E
+		//E E E
 		send_pkt(con);
 		return ret; 
 	}
     	if(con->con_state == FIN_WAIT1 && tcp_hdr->flags.FIN == 1){ 
-		E E
+		//E E
 		send_pkt(con);
 		con->con_state = FIN_WAIT2;
 		return ret; 
 	}
     	if(con->con_state == FIN_WAIT2 && tcp_hdr->flags.FIN == 1){ 
-		E
+		//E
 		send_pkt(con);
 		pet_socket_closed(con->sock);
 		remove_tcp_con(tcp_state->con_map, con);
