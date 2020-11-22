@@ -407,46 +407,16 @@ int get_max(uint16_t x, uint16_t y ){
     return y;
 }
 
-void update_packet_numbers(struct tcp_connection * con, struct tcp_raw_hdr* tcp_hdr){
-    con->seq_num_received = ntohl(tcp_hdr->seq_num); 
-    con->ack_num_received = ntohl(tcp_hdr->ack_num);
-    con->recv_win_received = ntohs(tcp_hdr->recv_win);
-    return;
-}
 
-int stop_wait_receive(struct tcp_connection * con, struct tcp_raw_hdr* tcp_hdr, uint32_t payload_len){
+int stop_wait_receive(struct tcp_connection * con, struct tcp_raw_hdr* tcp_hdr){
 
     con->seq_num_received = ntohl(tcp_hdr->seq_num); 
     con->ack_num_received = ntohl(tcp_hdr->ack_num);
     con->recv_win_received = ntohs(tcp_hdr->recv_win);
 
-    //we have not received any data yet
-    if(con->ack_num_local == 0){
-        con->ack_num_local = con->seq_num_received + payload_len;
-        if(tcp_hdr->flags.SYN==1){
-            con->ack_num_local++;
-        }
-    }
-    //our Seq number keeps track of how much data weve sent
-    con->seq_num_local = con->seq_num_local + payload_len;
-    if(tcp_hdr->flags.SYN == 1){
-        con->seq_num_local++;
-    }
-
-    //our Ack numbers confirm how much data weve received
-    con->ack_num_local = con->ack_num_local + payload_len;
-    if(tcp_hdr->flags.SYN == 1){
-        con->ack_num_local++;
-    }
-
-
-    con->ack_num_local = con->seq_num_received + get_max(1, payload_len);
+    con->seq_num_local = con->ack_num_received;
+    con->ack_num_local = con->seq_num_received;
     
-    pet_printf("All seems well here...\n");
-    pet_printf("seq local: %u\n", con->seq_num_local);
-    pet_printf("ack local: %u\n", con->ack_num_local);
-    pet_printf("seq rec: %u\n", con->seq_num_received);
-    pet_printf("ack rec: %u\n", con->ack_num_received);
     return 0;   
 }
 
@@ -509,11 +479,12 @@ tcp_pkt_rx(struct packet * pkt)
         if(con == NULL){ //Checks if con is not listening and there is no connection (effectively)
             return ret;
         }
-        update_packet_numbers(con, tcp_hdr);
-        int error = validate_packet(con);
-        if(error < 0){
-            pet_printf("wrong packet apparently");
-        }
+       // update_packet_numbers(con, tcp_hdr);
+        //int error = validate_packet(con);
+        //if(error < 0){
+       //     pet_printf("wrong packet apparently");
+       // }
+        stop_wait_receive(con, tcp_hdr);
         switch(con->con_state){
             case SYN_RCVD:
                 if(tcp_hdr->flags.ACK == 1){
@@ -522,12 +493,11 @@ tcp_pkt_rx(struct packet * pkt)
                     con->con_state = ESTABLISHED;
                     add_sock_to_tcp_con(tcp_state->con_map,con,pet_socket_accepted(con->sock, src_ip, ntohs(tcp_hdr->src_port)));  
                 }else{   
-                //We have to initalize seq and ack for our side of the communication
                 //then we send it with the [SYN,ACK] flags
-                con->ack_num_local = con->seq_num_received + 1; //increment for the SYN flag that we know we received
-                con->seq_num_local = con->ack_num_received;                
-                send_pkt(con);
-                con->seq_num_local += 1; //increment our seq because we sent a syn too
+                    con->ack_num_local  += 1; //increment for the SYN flag that we know we received
+               // con->seq_num_local = con->ack_num_received;                
+                    send_pkt(con);
+               // con->seq_num_local += 1; //increment our seq because we sent a syn too
                 }
                 break;
 
