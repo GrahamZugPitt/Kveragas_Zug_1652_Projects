@@ -360,33 +360,33 @@ tcp_pkt_rx(struct packet * pkt)
     if (pkt->layer_3_type == IPV4_PKT) {
    
         struct tcp_state* tcp_state = petnet_state->tcp_state;
-	struct tcp_connection* con = NULL;
-	struct tcp_connection* con_check_initial = NULL;
+        struct tcp_connection* con = NULL;
+        struct tcp_connection* con_check_initial = NULL;
         struct ipv4_raw_hdr * ipv4_hdr  = (struct ipv4_raw_hdr *)pkt->layer_3_hdr;
         struct tcp_raw_hdr  * tcp_hdr   = NULL;
         void                * payload   = NULL;
 
-	struct ipv4_addr * src_ip = NULL;
-	struct ipv4_addr * dst_ip = NULL;
+        struct ipv4_addr * src_ip = NULL;
+        struct ipv4_addr * dst_ip = NULL;
 
-	int ret = 0;
+        int ret = 0;
 
-    tcp_hdr  = __get_tcp_hdr(pkt);
-    payload  = __get_payload(pkt);
+        tcp_hdr  = __get_tcp_hdr(pkt);
+        payload  = __get_payload(pkt);
 
-    if (petnet_state->debug_enable) {
-        pet_printf("I recieved the packet.\n");
-        print_tcp_header(tcp_hdr);
-    }
+        if (petnet_state->debug_enable) {
+            pet_printf("I recieved the packet.\n");
+            print_tcp_header(tcp_hdr);
+        }
 
 
-    src_ip   = ipv4_addr_from_octets(ipv4_hdr->src_ip);
-    dst_ip   = ipv4_addr_from_octets(ipv4_hdr->dst_ip);
+        src_ip   = ipv4_addr_from_octets(ipv4_hdr->src_ip);
+        dst_ip   = ipv4_addr_from_octets(ipv4_hdr->dst_ip);
     /*if(ntohs(tcp_hdr->checksum) != _calculate_checksum(dst_ip, src_ip, pkt)){
         pet_printf("%u %u\n",tcp_hdr->checksum,_calculate_checksum(dst_ip, src_ip, pkt));
 	return -1;			
 	}*/
-    if(tcp_hdr->flags.ACK != 1 && tcp_hdr->flags.SYN == 1){ 
+        if(tcp_hdr->flags.ACK != 1 && tcp_hdr->flags.SYN == 1){ 
     		con_check_initial = get_and_lock_tcp_con_from_ipv4(tcp_state->con_map,dst_ip,dst_ip,ntohs(tcp_hdr->dst_port),ntohs(tcp_hdr->dst_port)); //gotta free it
 		if(con_check_initial == NULL || con_check_initial->con_state != LISTEN){
 			pet_printf("Attempted to contact a server that was not listening");
@@ -407,26 +407,69 @@ tcp_pkt_rx(struct packet * pkt)
 	}
 	//pet_printf("CON STATE %i\n", con->con_state);
 	update_con_packet_info(con, tcp_hdr, pkt);
-    	if(con->con_state == SYN_SENT && tcp_hdr->flags.FIN == 0 && tcp_hdr->flags.ACK == 1){
-		add_sock_to_tcp_con(tcp_state->con_map,con,pet_socket_accepted(con->sock, src_ip, ntohs(tcp_hdr->src_port)));
-		con->con_state = ESTABLISHED;
-	}
-    	if(con->con_state == SYN_RCVD && tcp_hdr->flags.FIN == 0){
-		add_sock_to_tcp_con(tcp_state->con_map,con,pet_socket_accepted(con->sock, src_ip, ntohs(tcp_hdr->src_port)));
-		con->con_state = ESTABLISHED;
-	}
-    	if(con->con_state == LAST_ACK && tcp_hdr->flags.ACK == 1){ //TODO: Update this function so it checks that the ACKs are correct (maybe)
-		pet_socket_closed(con->sock);
-		remove_tcp_con(tcp_state->con_map, con);
-		return ret;
-	}
-    	/*if(tcp_hdr->flags.FIN == 1){
-		con->con_state = CLOSE_WAIT;
-	}*/
+    switch(con->con_state){
+
+        case SYN_RCVD:
+            if(tcp_hdr->flags.ACK == 1){
+                //Handshake complete, transition to data transfer state. No need to send another Ack here.
+                con->con_state = ESTABLISHED;
+                add_sock_to_tcp_con(tcp_state->con_map,con,pet_socket_accepted(con->sock, src_ip, ntohs(tcp_hdr->src_port)));  
+            }
+            break;
+
+        case ESTABLISHED:
+            if(tcp_hdr->flags.FIN == 1){
+                //TODO: send [ack]
+                con->con_state = CLOSE_WAIT;
+                //handle the sending after close wait?
+                con->con_state = LAST_ACK;
+            }else{
+                //TODO: handle acking data segments
+            }
+            break;
+
+        case LAST_ACK:
+            if(tcp_hdr->flags.ACK == 1){
+                con->con_state = CLOSED;
+                pet_socket_closed(con->sock);
+                remove_tcp_con(tcp_state->con_map, con);
+                return ret;
+            }
+            break;
+
+        case FIN_WAIT1:
+            if(tcp_hdr->flags.ACK == 1){
+                con->con_state = FIN_WAIT2;
+            }
+            if(tcp_hdr->flags.FIN == 1){
+                con->con_state = CLOSED;
+                //TODO: send [ack]
+                //TODO: implement timeout?
+                pet_socket_closed(con->sock);
+                remove_tcp_con(tcp_state->con_map, con);
+                return ret;
+            }
+            break;
+
+        case FIN_WAIT2:
+            if(tcp_hdr->flags.FIN == 1){
+                con->con_state = CLOSED;
+                //TODO: send [ack]
+                //TODO: implement timeout?
+                pet_socket_closed(con->sock);
+                remove_tcp_con(tcp_state->con_map, con);
+                return ret;
+            }
+            break;
+        default:
+            break; // change this return statement if the flag handler starts messing up
+    }    
+    	
+    
     	if(con->con_state == FIN_WAIT1 && tcp_hdr->flags.FIN == 0){ //TODO: Possible we aren't supposed to ACK here and netcat is just stupid
 		//E E E
 		send_pkt(con);
-		return ret; 
+		r 
 	}
     	if(con->con_state == FIN_WAIT1 && tcp_hdr->flags.FIN == 1){ 
 		//E E
@@ -439,12 +482,13 @@ tcp_pkt_rx(struct packet * pkt)
 		send_pkt(con);
 		pet_socket_closed(con->sock);
 		remove_tcp_con(tcp_state->con_map, con);
+
 	}
 
 	//if(!(con->con_state == FIN_WAIT2 && tcp_hdr->flags.FIN == 0)){ 
 		//send_pkt(con); //possible this shouldn't be here, but I think it ensures we are ACKing properly
 	//}
-    	put_and_unlock_tcp_con(con);
+    put_and_unlock_tcp_con(con);
 	pet_socket_received_data(con->sock,payload,pkt->payload_len); //TODO: Make sure that this isn't feeding too much data to the socket, Order may matter here and you may need to put this somewhere else. 
 	return ret;
     }
