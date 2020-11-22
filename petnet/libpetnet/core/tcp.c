@@ -157,11 +157,35 @@ print_tcp_header(struct tcp_raw_hdr * tcp_hdr)
 
 }
 
+uint16_t
+calculate_checksum_continue_flip(uint16_t   checksum,
+                            void     * data,
+                            uint32_t   length_in_words)
+{
+    uint32_t   scratch   = checksum;
+    uint16_t * cast_data = data;
+
+    uint32_t i = 0;
+
+    for (i = 0; i < length_in_words; i++) {
+        scratch += htons(cast_data[i]);
+
+        // Wrap overflow
+        if (scratch & 0xffff0000) {
+            scratch &= 0x0000ffff;
+            scratch += 1;
+        }
+    }
+
+    return (uint16_t)scratch;
+}
+
 static uint16_t 
 _calculate_checksum(struct ipv4_addr    * local_addr,
                    struct ipv4_addr    * remote_addr,
                    struct packet       * pkt)
 {
+
 
     struct ipv4_pseudo_hdr hdr;
     uint16_t checksum = 0;
@@ -174,15 +198,9 @@ _calculate_checksum(struct ipv4_addr    * local_addr,
     hdr.length = htons(pkt->layer_4_hdr_len + pkt->payload_len);
 
     checksum = calculate_checksum_begin(&hdr, sizeof(struct ipv4_pseudo_hdr) / 2); 
-    checksum = calculate_checksum_continue(checksum, pkt->layer_4_hdr, pkt->layer_4_hdr_len / 2); 
-    checksum = calculate_checksum_continue(checksum, pkt->payload,     pkt->payload_len     / 2); 
-    pet_printf("%i \n", sizeof(pkt->payload));
-    pet_printf("%i \n", pkt->payload_len);
-    //if (pkt->payload_len > 0) 
-    //  checksum = checksum - (uint16_t)255;    
-    /* 
-     * If there is an odd number of data bytes we have to include a 0-byte after the the last byte 
-     */
+    checksum = calculate_checksum_continue(checksum, pkt->layer_4_hdr, pkt->layer_4_hdr_len / 2);  
+    checksum = calculate_checksum_continue_flip(checksum, pkt->payload,     pkt->payload_len     / 2);
+
     if ((pkt->payload_len % 2) != 0) {
         uint16_t tmp = *(uint8_t *)(pkt->payload + pkt->payload_len - 1);
 
@@ -190,8 +208,11 @@ _calculate_checksum(struct ipv4_addr    * local_addr,
     } else {
         checksum = calculate_checksum_finalize(checksum, NULL, 0);
     }
+
+	pet_printf("%u", checksum);
     return checksum;
 }
+
 
 uint16_t get_minimum(uint16_t x, uint16_t y){
     if(x < y)
@@ -240,7 +261,7 @@ int flag_handler(struct tcp_connection* con, struct tcp_raw_hdr* tcp_hdr){
 }
 
 int send_pkt(struct tcp_connection * con){
-    pet_printf("sending packet");
+    //pet_printf("sending packet");
     struct packet* pkt       = NULL;
     struct tcp_raw_hdr* tcp_hdr   = NULL;
     pkt = create_empty_packet();
@@ -256,12 +277,12 @@ int send_pkt(struct tcp_connection * con){
     tcp_hdr->header_len = pkt->layer_4_hdr_len;
     tcp_hdr->recv_win = htons((uint16_t) 1000);
 
-   // pkt->payload_len = get_minimum((uint16_t)pet_socket_send_capacity(con->sock),con->recv_win_received); //TODO: fix this
+    pkt->payload_len = get_minimum((uint16_t)pet_socket_send_capacity(con->sock),con->recv_win_received); //TODO: fix this
     //pet_printf("HERE HERE HERE %u \n",pkt->payload_len);
-    //pkt->payload     = pet_malloc(pkt->payload_len);
-    pkt->payload = NULL;
-    pkt->payload_len=0;
-    print_tcp_header(tcp_hdr);
+    pkt->payload     = pet_malloc(pkt->payload_len);
+    //pkt->payload = NULL;
+    //pkt->payload_len=0;
+    //print_tcp_header(tcp_hdr);
     pet_socket_sending_data(con->sock, pkt->payload, pkt->payload_len);
     tcp_hdr->checksum = _calculate_checksum(con->ipv4_tuple.local_ip, con->ipv4_tuple.remote_ip, pkt);  
     //pet_printf("HERE HERE HERE %u \n",pkt->payload_len);  
@@ -460,11 +481,11 @@ tcp_pkt_rx(struct packet * pkt)
         tcp_hdr  = __get_tcp_hdr(pkt);
         payload  = __get_payload(pkt);
 
-       // if (petnet_state->debug_enable) {
+        if (petnet_state->debug_enable) {
             pet_printf("I received the packet.\n");
             print_tcp_header(tcp_hdr);
 
-        //}
+        }
 
 
         src_ip   = ipv4_addr_from_octets(ipv4_hdr->src_ip);
@@ -518,7 +539,7 @@ tcp_pkt_rx(struct packet * pkt)
                     con->ack_num_local += __get_payload_len(pkt);
                     send_pkt(con);
                 }else if(tcp_hdr->flags.ACK == 1){
-                    pet_printf("Have not yet supported receiving acks in ESTABLISHED.");
+                    //pet_printf("Have not yet supported receiving acks in ESTABLISHED.");
                 }
             break;
 
