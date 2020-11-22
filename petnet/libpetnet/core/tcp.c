@@ -27,7 +27,7 @@
 #include "packet.h"
 #include "socket.h"
 
-#define EZ pet_printf("%u \n", ntohs(tcp_hdr->checksum));
+#define EZ pet_printf("Hooty Hoo");
 
 
 extern int petnet_errno;
@@ -142,15 +142,16 @@ print_tcp_header(struct tcp_raw_hdr * tcp_hdr)
 }
 
 static uint16_t 
-_calculate_checksum(struct tcp_connection * con,
+_calculate_checksum(struct ipv4_addr    * local_addr,
                    struct ipv4_addr    * remote_addr,
                    struct packet       * pkt)
 {
+
     struct ipv4_pseudo_hdr hdr;
     uint16_t checksum = 0;
     memset(&hdr, 0, sizeof(struct ipv4_pseudo_hdr));
 
-    ipv4_addr_to_octets(con->ipv4_tuple.local_ip,  hdr.src_ip);
+    ipv4_addr_to_octets(local_addr,  hdr.src_ip);
     ipv4_addr_to_octets(remote_addr,                    hdr.dst_ip);
 
     hdr.proto  = IPV4_PROTO_TCP;
@@ -159,9 +160,10 @@ _calculate_checksum(struct tcp_connection * con,
     checksum = calculate_checksum_begin(&hdr, sizeof(struct ipv4_pseudo_hdr) / 2); 
     checksum = calculate_checksum_continue(checksum, pkt->layer_4_hdr, pkt->layer_4_hdr_len / 2); 
     checksum = calculate_checksum_continue(checksum, pkt->payload,     pkt->payload_len     / 2); 
-
-	if (pkt->payload_len > 0) 
-		checksum = checksum - (uint16_t)255;	
+    pet_printf("%i \n", sizeof(pkt->payload));
+    pet_printf("%i \n", pkt->payload_len);
+	//if (pkt->payload_len > 0) 
+	//	checksum = checksum - (uint16_t)255;	
     /* 
      * If there is an odd number of data bytes we have to include a 0-byte after the the last byte 
      */
@@ -236,14 +238,14 @@ int send_pkt(struct tcp_connection * con){
 	tcp_hdr->recv_win = htons((uint16_t) 1000);
 
     	pkt->payload_len = get_minimum((uint16_t)pet_socket_send_capacity(con->sock),con->recv_win_recieved); //TODO: fix this
-	pet_printf("HERE HERE HERE %u \n",pkt->payload_len);
+	//pet_printf("HERE HERE HERE %u \n",pkt->payload_len);
     	pkt->payload     = pet_malloc(pkt->payload_len);
 		
-	if(pet_socket_send_capacity(con->sock) > 0){
-    		pet_socket_sending_data(con->sock, pkt->payload, pkt->payload_len);
-	}
-    	tcp_hdr->checksum = _calculate_checksum(con, con->ipv4_tuple.remote_ip, pkt);	
-	pet_printf("HERE HERE HERE %u \n",pkt->payload_len);	
+    	pet_socket_sending_data(con->sock, pkt->payload, pkt->payload_len);
+
+    	tcp_hdr->checksum = _calculate_checksum(con->ipv4_tuple.local_ip, con->ipv4_tuple.remote_ip, pkt);	
+	//pet_printf("HERE HERE HERE %u \n",pkt->payload_len);	
+
 	ipv4_pkt_tx(pkt, con->ipv4_tuple.remote_ip);
         //pet_printf("I sent the packet.\n");
         //print_tcp_header(tcp_hdr);
@@ -372,13 +374,18 @@ tcp_pkt_rx(struct packet * pkt)
     tcp_hdr  = __get_tcp_hdr(pkt);
     payload  = __get_payload(pkt);
 
-    //if (petnet_state->debug_enable) {
+    if (petnet_state->debug_enable) {
         pet_printf("I recieved the packet.\n");
         print_tcp_header(tcp_hdr);
-    //}
+    }
+
 
     src_ip   = ipv4_addr_from_octets(ipv4_hdr->src_ip);
     dst_ip   = ipv4_addr_from_octets(ipv4_hdr->dst_ip);
+    /*if(ntohs(tcp_hdr->checksum) != _calculate_checksum(dst_ip, src_ip, pkt)){
+        pet_printf("%u %u\n",tcp_hdr->checksum,_calculate_checksum(dst_ip, src_ip, pkt));
+	return -1;			
+	}*/
     if(tcp_hdr->flags.ACK != 1 && tcp_hdr->flags.SYN == 1){ 
     		con_check_initial = get_and_lock_tcp_con_from_ipv4(tcp_state->con_map,dst_ip,dst_ip,ntohs(tcp_hdr->dst_port),ntohs(tcp_hdr->dst_port)); //gotta free it
 		if(con_check_initial == NULL || con_check_initial->con_state != LISTEN){
