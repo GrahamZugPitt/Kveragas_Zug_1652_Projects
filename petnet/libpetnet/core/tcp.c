@@ -209,7 +209,6 @@ _calculate_checksum(struct ipv4_addr    * local_addr,
         checksum = calculate_checksum_finalize(checksum, NULL, 0);
     }
 
-	pet_printf("%u", checksum);
     return checksum;
 }
 
@@ -260,6 +259,7 @@ int flag_handler(struct tcp_connection* con, struct tcp_raw_hdr* tcp_hdr){
     return -1;
 }
 
+
 int send_pkt(struct tcp_connection * con){
     //pet_printf("sending packet");
     struct packet* pkt       = NULL;
@@ -288,8 +288,8 @@ int send_pkt(struct tcp_connection * con){
     //pet_printf("HERE HERE HERE %u \n",pkt->payload_len);  
 
     ipv4_pkt_tx(pkt, con->ipv4_tuple.remote_ip);
-        //pet_printf("I sent the packet.\n");
-        //print_tcp_header(tcp_hdr);
+    con->seq_num_local = con->seq_num_local + pkt->payload_len;
+    
 
     return 0;   
 }
@@ -408,12 +408,12 @@ int get_max(uint16_t x, uint16_t y ){
 }
 
 
-int stop_wait_receive(struct tcp_connection * con, struct tcp_raw_hdr* tcp_hdr){
+int stop_wait_receive(struct tcp_connection * con, struct tcp_raw_hdr* tcp_hdr, struct packet* pkt){
 
-    con->seq_num_received = ntohl(tcp_hdr->seq_num); 
+    con->seq_num_received = ntohl(tcp_hdr->seq_num);
     con->ack_num_received = ntohl(tcp_hdr->ack_num);
     con->recv_win_received = ntohs(tcp_hdr->recv_win);
-
+	//pet_printf("%u \n",ntohl(tcp_hdr->ack_num));
     con->seq_num_local = con->ack_num_received;
     con->ack_num_local = con->seq_num_received;
     
@@ -484,7 +484,7 @@ tcp_pkt_rx(struct packet * pkt)
         //if(error < 0){
        //     pet_printf("wrong packet apparently");
        // }
-        stop_wait_receive(con, tcp_hdr);
+        stop_wait_receive(con, tcp_hdr, pkt);
         switch(con->con_state){
             case SYN_RCVD:
                 if(tcp_hdr->flags.ACK == 1){
