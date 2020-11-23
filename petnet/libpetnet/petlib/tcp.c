@@ -212,7 +212,6 @@ _calculate_checksum(struct ipv4_addr    * local_addr,
     return checksum;
 }
 
-
 uint16_t get_minimum(uint16_t x, uint16_t y){
     if(x < y)
         return x;
@@ -227,7 +226,6 @@ int flag_handler(struct tcp_connection* con, struct tcp_raw_hdr* tcp_hdr){
         case SYN_RCVD:
             tcp_hdr->flags.SYN = 1;
             tcp_hdr->flags.ACK = 1;
-            //con->seq_num_received++;
             return 0;
         case ESTABLISHED:
             tcp_hdr->flags.ACK = 1;
@@ -241,12 +239,9 @@ int flag_handler(struct tcp_connection* con, struct tcp_raw_hdr* tcp_hdr){
             tcp_hdr->flags.ACK = 1;
             return 0;
         case FIN_WAIT2:
-            //con->con_state = TIME_WAIT;
-            tcp_hdr->flags.FIN = 1;
             tcp_hdr->flags.ACK = 1;
             return 0;
         case CLOSING:
-           // con->con_state = TIME_WAIT;
             tcp_hdr->flags.FIN = 1;
             tcp_hdr->flags.ACK = 1;
             return 0;
@@ -280,9 +275,7 @@ int send_pkt(struct tcp_connection * con){
     pkt->payload_len = get_minimum((uint16_t)pet_socket_send_capacity(con->sock),con->recv_win_received); //TODO: fix this
     //pet_printf("HERE HERE HERE %u \n",pkt->payload_len);
     pkt->payload     = pet_malloc(pkt->payload_len);
-    //pkt->payload = NULL;
-    //pkt->payload_len=0;
-    //print_tcp_header(tcp_hdr);
+
     pet_socket_sending_data(con->sock, pkt->payload, pkt->payload_len);
     tcp_hdr->checksum = _calculate_checksum(con->ipv4_tuple.local_ip, con->ipv4_tuple.remote_ip, pkt);  
     //pet_printf("HERE HERE HERE %u \n",pkt->payload_len);  
@@ -326,7 +319,7 @@ tcp_connect_ipv4(struct socket    * sock,
     con->con_state = SYN_SENT;
     send_pkt(con);
     put_and_unlock_tcp_con(con);
-    return -1; /*TODO: Set con_state flag to SYN_SENT, call TCP_send with the connection, I will handle the outgoing packet in TCP_send
+    return 0; /*TODO: Set con_state flag to SYN_SENT, call TCP_send with the connection, I will handle the outgoing packet in TCP_send
             create_ipv4_tcp_con, add_sock_to_tcp_con,
             lock the connection
             */
@@ -380,10 +373,10 @@ tcp_send(struct socket * sock)
 int
 tcp_close(struct socket * sock)
 {
+    sleep(1);
     struct tcp_state      * tcp_state = petnet_state->tcp_state;
     struct tcp_connection * con       = get_and_lock_tcp_con_from_sock(tcp_state->con_map,sock);
     con->con_state = FIN_WAIT1;
-    
     send_pkt(con);
     put_and_unlock_tcp_con(con);
 
@@ -460,10 +453,9 @@ tcp_pkt_rx(struct packet * pkt)
 
         src_ip   = ipv4_addr_from_octets(ipv4_hdr->src_ip);
         dst_ip   = ipv4_addr_from_octets(ipv4_hdr->dst_ip);
-    /*if(ntohs(tcp_hdr->checksum) != _calculate_checksum(dst_ip, src_ip, pkt)){
-        pet_printf("%u %u\n",tcp_hdr->checksum,_calculate_checksum(dst_ip, src_ip, pkt));
-    return -1;          
-    }*/
+
+
+
         if(tcp_hdr->flags.ACK != 1 && tcp_hdr->flags.SYN == 1){
             con_check_initial = get_and_lock_tcp_con_from_ipv4(tcp_state->con_map,dst_ip,dst_ip,ntohs(tcp_hdr->dst_port),ntohs(tcp_hdr->dst_port)); //gotta free it
             if(con_check_initial == NULL || con_check_initial->con_state != LISTEN){
@@ -479,25 +471,37 @@ tcp_pkt_rx(struct packet * pkt)
         if(con == NULL){ //Checks if con is not listening and there is no connection (effectively)
             return ret;
         }
-       // update_packet_numbers(con, tcp_hdr);
-        //int error = validate_packet(con);
-        //if(error < 0){
-       //     pet_printf("wrong packet apparently");
-       // }
+  	
         stop_wait_receive(con, tcp_hdr, pkt);
+	if(tcp_hdr->flags.FIN == 1){
+		con->con_state = CLOSE_WAIT;
+	}
         switch(con->con_state){
+	    case SYN_SENT:
+                if(tcp_hdr->flags.ACK == 1 && tcp_hdr->flags.SYN == 1){
+                    con->con_state = ESTABLISHED;	
+		    con->ack_num_local++; 
+		    send_pkt(con); 
+		    pet_socket_connected(con->sock);
+                }else{   
+                //then we send it with the [SYN,ACK] flags
+                    //con->ack_num_local  += 1; //increment for the SYN flag that we know we received
+               // con->seq_num_local = con->ack_num_received;                
+                    send_pkt(con);
+               // con->seq_num_local += 1; //increment our seq because we sent a syn too
+                }
+                break;
             case SYN_RCVD:
                 if(tcp_hdr->flags.ACK == 1){
                 pet_printf("Handshake complete.\n");
                 //Handshake complete, transition to data transfer state. No need to send another Ack here.
                     con->con_state = ESTABLISHED;
                     add_sock_to_tcp_con(tcp_state->con_map,con,pet_socket_accepted(con->sock, src_ip, ntohs(tcp_hdr->src_port)));  
-                }else{   
-                //then we send it with the [SYN,ACK] flags
-                    con->ack_num_local  += 1; //increment for the SYN flag that we know we received
-               // con->seq_num_local = con->ack_num_received;                
+                }else{         
+                  con->ack_num_local  += 1; //increment for the SYN flag that we know we received
+                  con->seq_num_local = con->ack_num_received;                
                     send_pkt(con);
-               // con->seq_num_local += 1; //increment our seq because we sent a syn too
+                  con->seq_num_local += 1; //increment our seq because we sent a syn too
                 }
                 break;
 
@@ -515,8 +519,8 @@ tcp_pkt_rx(struct packet * pkt)
 
             case CLOSE_WAIT:
                 if(tcp_hdr->flags.FIN == 1){
-                    con->con_state = LAST_ACK;
                     send_pkt(con);
+                    con->con_state = LAST_ACK;
                 }
                 break;
 
@@ -532,10 +536,7 @@ tcp_pkt_rx(struct packet * pkt)
             case FIN_WAIT1:
                 if(tcp_hdr->flags.ACK == 1){
                     con->con_state = FIN_WAIT2;
-                }
-                if(tcp_hdr->flags.FIN == 1){
-                    con->con_state = CLOSED;
-                //TODO: implement timeout?
+		    send_pkt(con);
                     pet_socket_closed(con->sock);
                     remove_tcp_con(tcp_state->con_map, con);
                     return ret;
@@ -545,7 +546,6 @@ tcp_pkt_rx(struct packet * pkt)
             case FIN_WAIT2:
                 if(tcp_hdr->flags.FIN == 1){
                     con->con_state = CLOSED;
-                //TODO: implement timeout?
                     pet_socket_closed(con->sock);
                     remove_tcp_con(tcp_state->con_map, con);
                     return ret;
