@@ -212,7 +212,6 @@ _calculate_checksum(struct ipv4_addr    * local_addr,
     return checksum;
 }
 
-
 uint16_t get_minimum(uint16_t x, uint16_t y){
     if(x < y)
         return x;
@@ -227,7 +226,6 @@ int flag_handler(struct tcp_connection* con, struct tcp_raw_hdr* tcp_hdr){
         case SYN_RCVD:
             tcp_hdr->flags.SYN = 1;
             tcp_hdr->flags.ACK = 1;
-            //con->seq_num_received++;
             return 0;
         case ESTABLISHED:
             tcp_hdr->flags.ACK = 1;
@@ -460,10 +458,9 @@ tcp_pkt_rx(struct packet * pkt)
 
         src_ip   = ipv4_addr_from_octets(ipv4_hdr->src_ip);
         dst_ip   = ipv4_addr_from_octets(ipv4_hdr->dst_ip);
-    /*if(ntohs(tcp_hdr->checksum) != _calculate_checksum(dst_ip, src_ip, pkt)){
-        pet_printf("%u %u\n",tcp_hdr->checksum,_calculate_checksum(dst_ip, src_ip, pkt));
-    return -1;          
-    }*/
+
+
+
         if(tcp_hdr->flags.ACK != 1 && tcp_hdr->flags.SYN == 1){
             con_check_initial = get_and_lock_tcp_con_from_ipv4(tcp_state->con_map,dst_ip,dst_ip,ntohs(tcp_hdr->dst_port),ntohs(tcp_hdr->dst_port)); //gotta free it
             if(con_check_initial == NULL || con_check_initial->con_state != LISTEN){
@@ -479,11 +476,7 @@ tcp_pkt_rx(struct packet * pkt)
         if(con == NULL){ //Checks if con is not listening and there is no connection (effectively)
             return ret;
         }
-       // update_packet_numbers(con, tcp_hdr);
-        //int error = validate_packet(con);
-        //if(error < 0){
-       //     pet_printf("wrong packet apparently");
-       // }
+  	
         stop_wait_receive(con, tcp_hdr, pkt);
         switch(con->con_state){
 	    case SYN_SENT:
@@ -507,7 +500,10 @@ tcp_pkt_rx(struct packet * pkt)
                     con->con_state = ESTABLISHED;
                     add_sock_to_tcp_con(tcp_state->con_map,con,pet_socket_accepted(con->sock, src_ip, ntohs(tcp_hdr->src_port)));  
                 }else{         
+                  con->ack_num_local  += 1; //increment for the SYN flag that we know we received
+                  con->seq_num_local = con->ack_num_received;                
                     send_pkt(con);
+                  con->seq_num_local += 1; //increment our seq because we sent a syn too
                 }
                 break;
 
