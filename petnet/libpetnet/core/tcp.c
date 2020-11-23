@@ -326,7 +326,7 @@ tcp_connect_ipv4(struct socket    * sock,
     con->con_state = SYN_SENT;
     send_pkt(con);
     put_and_unlock_tcp_con(con);
-    return -1; /*TODO: Set con_state flag to SYN_SENT, call TCP_send with the connection, I will handle the outgoing packet in TCP_send
+    return 0; /*TODO: Set con_state flag to SYN_SENT, call TCP_send with the connection, I will handle the outgoing packet in TCP_send
             create_ipv4_tcp_con, add_sock_to_tcp_con,
             lock the connection
             */
@@ -486,18 +486,28 @@ tcp_pkt_rx(struct packet * pkt)
        // }
         stop_wait_receive(con, tcp_hdr, pkt);
         switch(con->con_state){
+	    case SYN_SENT:
+                if(tcp_hdr->flags.ACK == 1 && tcp_hdr->flags.SYN == 1){
+                    con->con_state = ESTABLISHED;	
+		    con->ack_num_local++; 
+		    send_pkt(con); 
+		    pet_socket_connected(con->sock);
+                }else{   
+                //then we send it with the [SYN,ACK] flags
+                    //con->ack_num_local  += 1; //increment for the SYN flag that we know we received
+               // con->seq_num_local = con->ack_num_received;                
+                    send_pkt(con);
+               // con->seq_num_local += 1; //increment our seq because we sent a syn too
+                }
+                break;
             case SYN_RCVD:
                 if(tcp_hdr->flags.ACK == 1){
                 pet_printf("Handshake complete.\n");
                 //Handshake complete, transition to data transfer state. No need to send another Ack here.
                     con->con_state = ESTABLISHED;
                     add_sock_to_tcp_con(tcp_state->con_map,con,pet_socket_accepted(con->sock, src_ip, ntohs(tcp_hdr->src_port)));  
-                }else{   
-                //then we send it with the [SYN,ACK] flags
-                    con->ack_num_local  += 1; //increment for the SYN flag that we know we received
-               // con->seq_num_local = con->ack_num_received;                
+                }else{         
                     send_pkt(con);
-               // con->seq_num_local += 1; //increment our seq because we sent a syn too
                 }
                 break;
 
